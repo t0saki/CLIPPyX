@@ -1,110 +1,104 @@
-import ctypes
-import requests
-from tqdm import tqdm
+import sqlite3
 import os
-from zipfile import ZipFile 
-
-# Constants
-EVERYTHING_REQUEST_FILE_NAME = 0x00000001
-EVERYTHING_REQUEST_PATH = 0x00000002
-
-# DLL imports
-try:
-    everything_dll = ctypes.WinDLL("Index\\Everything-SDK\\DLL\\Everything64.dll")
-except:
-    url = f"https://www.voidtools.com/Everything-SDK.zip"
-    response = requests.get(url, stream=True)
-
-    file_size = int(response.headers.get("Content-Length", 0))
-    chunk_size = 1024  # 1 KB
-    filename = url.split("/")[-1]
-
-    progress = tqdm(
-        response.iter_content(chunk_size),
-        f"Downloading {filename}",
-        total=file_size,
-        unit="B",
-        unit_scale=True,
-        unit_divisor=1024,
-    )
-    with open(f"Index/{filename}", "wb") as f:
-        for data in progress.iterable:
-            f.write(data)
-            progress.update(len(data))
-
-    # unzip the downloaded file
-    with ZipFile(f"Index/{filename}", "r") as zip_ref:
-        zip_ref.extractall("Index/Everything-SDK")
-    # delete the downloaded zip file
-    os.remove(f"Index/{filename}")
-    # load the DLL
-    everything_dll = ctypes.WinDLL("Index\\Everything-SDK\\DLL\\Everything64.dll")
-
-everything_dll.Everything_GetResultDateModified.argtypes = [
-    ctypes.c_int,
-    ctypes.POINTER(ctypes.c_ulonglong),
-]
-everything_dll.Everything_GetResultSize.argtypes = [
-    ctypes.c_int,
-    ctypes.POINTER(ctypes.c_ulonglong),
-]
-everything_dll.Everything_GetResultFileNameW.argtypes = [ctypes.c_int]
-everything_dll.Everything_GetResultFileNameW.restype = ctypes.c_wchar_p
 
 
-def search_files(formats=["*.png", "*.jpg", "*.jpeg"]):
+def create_db_if_not_exists(db_path):
     """
-    Search for files with the given formats and return their full path names.
+    Ensure the database file and its directory exist.
 
     Args:
+        db_path (str): Path to the SQLite database.
+    """
+    db_dir = os.path.dirname(db_path)
+    if not os.path.exists(db_dir):
+        os.makedirs(db_dir)
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS images (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT UNIQUE NOT NULL
+        )
+    """
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_file_names_in_db(file_names, db_path):
+    """
+    Update the file names in a SQLite database.
+
+    Args:
+        file_names (list): List of file names to update.
+        db_path (str): Path to the SQLite database.
+    """
+    create_db_if_not_exists(db_path)
+
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Start a transaction
+    cursor.execute("BEGIN TRANSACTION")
+
+    # Delete rows not in the new file list
+    cursor.execute(
+        "DELETE FROM images WHERE path NOT IN ({seq})".format(
+            seq=",".join(["?"] * len(file_names))
+        ),
+        file_names,
+    )
+
+    # Insert new files, ignoring duplicates
+    cursor.executemany(
+        "INSERT OR IGNORE INTO images (path) VALUES (?)",
+        [(file_name,) for file_name in file_names],
+    )
+
+    # Commit the transaction
+    conn.commit()
+    conn.close()
+
+    print(f"Database updated with paths of all images in {db_path}")
+
+
+import os
+
+
+def search_existing_files(directory, formats):
+    """
+    Search for existing files in the given directory with the specified formats.
+
+    Args:
+        directory (str): Directory to search for files.
         formats (list): List of file formats to search for.
 
     Returns:
         list: List of full path names of the found files.
     """
     file_names = []
-
-    for format in formats:
-        # Create buffers
-        filename = ctypes.create_unicode_buffer(260)
-
-        # Setup search
-        everything_dll.Everything_SetSearchW(format)
-        everything_dll.Everything_SetRequestFlags(
-            EVERYTHING_REQUEST_FILE_NAME | EVERYTHING_REQUEST_PATH
-        )
-
-        # Execute the query
-        everything_dll.Everything_QueryW(1)
-
-        # Get the number of results
-        num_results = everything_dll.Everything_GetNumResults()
-
-        # Show results
-        for i in range(num_results):
-            everything_dll.Everything_GetResultFullPathNameW(i, filename, 260)
-            file_names.append(ctypes.wstring_at(filename))
-
+    for root, dirs, files in os.walk(directory):
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if entry.is_file() and any(
+                    entry.name.lower().endswith(format) for format in formats
+                ):
+                    file_names.append(entry.path)
     return file_names
 
 
-def save_file_names(file_names, file_path):
-    """
-    Save the file names to a text file.
+def universal_search():
+    # Define the directory to search
+    directory_to_search = os.getenv("LOCAL_IMAGE_DIR", "/Users/bytedance/dev/img")
 
-    Args:
-        file_names (list): List of file names to save.
-        file_path (str): Path to the text file to save the file names in.
-    """
-    with open(file_path, "w") as f:
-        for file_name in file_names:
-            f.write(file_name + "\n")
+    # Search for files
+    file_names = search_existing_files(directory_to_search, [".png", ".jpg", ".jpeg"])
 
-    print(f"Paths of all images saved in {file_path}")
+    # Update file names in SQLite database
+    update_file_names_in_db(file_names, "db/image_index.db")
 
 
 if __name__ == "__main__":
-    # Search for files
-    file_names = search_files()
-    # Save file names to text file
-    save_file_names(file_names, "images_paths.txt")
+    universal_search()

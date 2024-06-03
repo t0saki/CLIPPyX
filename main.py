@@ -12,3 +12,6 @@ if config["server_os"] == "wsl":
 elif config["server_os"] == "windows":
     print("Running in Windows")
     subprocess.run(["python", "server.py"])
+elif config["server_os"] == "linux":
+    print("Running in Linux")
+    subprocess.run(["python", "server.py"])

@@ -1,4 +1,4 @@
-server_os: windows  # OR "windows"
+server_os: linux  # OR "windows"
 # CLIP for Image and search query embedding
 clip:
     # provider = ["transformers" or "mobileclip"]

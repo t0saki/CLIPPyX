@@ -19,7 +19,6 @@ elif config['text_embed']['provider'] == "transformers":
 from OCR import apply_OCR
 
 
-
 def create_vectordb(path):
     """
     Create and return image and text collections in a VectorDB database.
@@ -47,36 +46,55 @@ def create_vectordb(path):
     )
     return image_collection, text_collection
 
+import sqlite3
+import os
 
-def get_images_paths(file_path):
+
+def get_images_paths(db_path):
     """
-    Extract image paths from a file and return them in original and OS-specific formats.
+    Extract image paths from a SQLite database and return them in original and OS-specific formats.
 
-    This function reads a file line by line, with each line expected to contain a path to an image.
-    It returns two lists of paths: one with the original paths as they are in the file, and one with
-    the paths formatted for the current operating system.
+    This function reads image paths from a SQLite database. It returns two lists of paths:
+    one with the original paths as they are in the database, and one with the paths formatted
+    for the current operating system.
 
-    If the script is running on a POSIX system (like Linux or WSL), it will replace backslashes with
-    forward slashes and 'C:' with '/mnt/c' in the paths.
+    If the script is running on a POSIX system (like Linux or WSL), it will replace backslashes
+    with forward slashes and 'C:' with '/mnt/c' in the paths.
 
     Args:
-        file_path (str): The path to the file containing the image paths.
+        db_path (str): The path to the SQLite database containing the image paths.
 
     Returns:
         tuple: A tuple containing two lists of strings. The first list contains the original paths,
         and the second list contains the OS-specific paths.
     """
     original_paths = []
-    with open(file_path, "r") as f:
-        for line in f:
-            original_paths.append(line.strip())
 
-    if os.name == "posix":  # If running on WSL
+    # Connect to the SQLite database
+    conn = sqlite3.connect(db_path)
+    c = conn.cursor()
+
+    # Execute the query to get all image paths
+    c.execute("SELECT path FROM images")
+
+    # Fetch all results
+    rows = c.fetchall()
+
+    # Close the database connection
+    conn.close()
+
+    # Populate the original_paths list
+    for row in rows:
+        original_paths.append(row[0])
+
+    # Adjust paths for POSIX systems if necessary
+    if os.name == "posix":  # If running on POSIX (Linux, WSL, etc.)
         os_paths = [
             path.replace("\\", "/").replace("C:", "/mnt/c") for path in original_paths
         ]
     else:
         os_paths = original_paths
+
     return original_paths, os_paths
 
 
